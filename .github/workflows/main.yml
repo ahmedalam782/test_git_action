@@ -53,82 +53,82 @@ jobs:
         run: |
           FOLDER_ID=$(echo "${{ github.event.head_commit.message }}" | grep -oP 'FOLDER_ID=\K\S+')
           echo "folder_id=$FOLDER_ID" >> $GITHUB_OUTPUT
+          
+         - name: Write Google credentials to file
+           run: echo '${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}' > credentials.json
 
-      # - name: Write Google credentials to file
-      #   run: echo '${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}' > credentials.json
+       # ✅ تثبيت Python
+       - name: Set up Python
+         uses: actions/setup-python@v4
+         with:
+           python-version: "3.x"
 
-      # # ✅ تثبيت Python
-      # - name: Set up Python
-      #   uses: actions/setup-python@v4
-      #   with:
-      #     python-version: "3.x"
+       - name: Install Python dependencies
+         run: pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
 
-      # - name: Install Python dependencies
-      #   run: pip install --upgrade google-api-python-client google-auth-httplib2 google-auth-oauthlib
+       - name: Upload APK to Google Drive & Send Email
+         env:
+           FOLDER_ID: ${{ steps.extract_folder.outputs.folder_id }}
+           EMAIL_USER: ${{ secrets.EMAIL_USER }}
+           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+           GITHUB_REF_NAME: ${{ github.ref_name }}
+         run: |
+           cat > upload_and_email.py <<EOF
+           import os
+           import smtplib
+           from email.mime.text import MIMEText
+           from google.oauth2 import service_account
+           from googleapiclient.discovery import build
+           from googleapiclient.http import MediaFileUpload
 
-      # - name: Upload APK to Google Drive & Send Email
-      #   env:
-      #     FOLDER_ID: ${{ steps.extract_folder.outputs.folder_id }}
-      #     EMAIL_USER: ${{ secrets.EMAIL_USER }}
-      #     EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-      #     EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
-      #     GITHUB_REF_NAME: ${{ github.ref_name }}
-      #   run: |
-      #     cat > upload_and_email.py <<EOF
-      #     import os
-      #     import smtplib
-      #     from email.mime.text import MIMEText
-      #     from google.oauth2 import service_account
-      #     from googleapiclient.discovery import build
-      #     from googleapiclient.http import MediaFileUpload
+           # === Google Drive Upload ===
+           FOLDER_ID = os.environ['FOLDER_ID']
+           SCOPES = ['https://www.googleapis.com/auth/drive.file']
+           SERVICE_ACCOUNT_FILE = 'credentials.json'
 
-      #     # === Google Drive Upload ===
-      #     FOLDER_ID = os.environ['FOLDER_ID']
-      #     SCOPES = ['https://www.googleapis.com/auth/drive.file']
-      #     SERVICE_ACCOUNT_FILE = 'credentials.json'
+           credentials = service_account.Credentials.from_service_account_file(
+               SERVICE_ACCOUNT_FILE, scopes=SCOPES)
 
-      #     credentials = service_account.Credentials.from_service_account_file(
-      #         SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+           service = build('drive', 'v3', credentials=credentials)
 
-      #     service = build('drive', 'v3', credentials=credentials)
+           ref_name = os.environ.get('GITHUB_REF_NAME', 'unknown-branch')
 
-      #     ref_name = os.environ.get('GITHUB_REF_NAME', 'unknown-branch')
+           file_name = f"app-release-{ref_name}.apk"
 
-      #     file_name = f"app-release-{ref_name}.apk"
+           file_metadata = {
+               'name': file_name,
+               'parents': [FOLDER_ID]
+           }
+           media = MediaFileUpload(
+               'build/app/outputs/flutter-apk/app-release.apk',
+               mimetype='application/vnd.android.package-archive'
+           )
+           file = service.files().create(
+               body=file_metadata,
+               media_body=media,
+               fields='id, webViewLink'
+           ).execute()
 
-      #     file_metadata = {
-      #         'name': file_name,
-      #         'parents': [FOLDER_ID]
-      #     }
-      #     media = MediaFileUpload(
-      #         'build/app/outputs/flutter-apk/app-release.apk',
-      #         mimetype='application/vnd.android.package-archive'
-      #     )
-      #     file = service.files().create(
-      #         body=file_metadata,
-      #         media_body=media,
-      #         fields='id, webViewLink'
-      #     ).execute()
+           file_link = file.get("webViewLink")
+           print("✅ File uploaded to Google Drive!")
+           print("📎 Link:", file_link)
 
-      #     file_link = file.get("webViewLink")
-      #     print("✅ File uploaded to Google Drive!")
-      #     print("📎 Link:", file_link)
+           # === Send Email ===
+           to_emails = [email.strip() for email in os.environ['EMAIL_RECEIVER'].split(',')]
+           msg = MIMEText(f"✅ APK build is complete!\n\n🔗 Download link:\n{file_link}")
+           msg['Subject'] = f"✅ New APK Build Available for {ref_name}"
+           msg['From'] = os.environ['EMAIL_USER']
+           msg['To'] = ', '.join(to_emails)
 
-      #     # === Send Email ===
-      #     to_emails = [email.strip() for email in os.environ['EMAIL_RECEIVER'].split(',')]
-      #     msg = MIMEText(f"✅ APK build is complete!\n\n🔗 Download link:\n{file_link}")
-      #     msg['Subject'] = f"✅ New APK Build Available for {ref_name}"
-      #     msg['From'] = os.environ['EMAIL_USER']
-      #     msg['To'] = ', '.join(to_emails)
-
-      #     try:
-      #         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-      #             server.login(os.environ['EMAIL_USER'], os.environ['EMAIL_PASS'])
-      #             server.send_message(msg)
-      #             print("📬 Email sent successfully to:", ', '.join(to_emails))
-      #     except Exception as e:
-      #         print("❌ Failed to send email:", e)
-      #     EOF
-      #     python3 upload_and_email.py
+           try:
+               with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                   server.login(os.environ['EMAIL_USER'], os.environ['EMAIL_PASS'])
+                   server.send_message(msg)
+                   print("📬 Email sent successfully to:", ', '.join(to_emails))
+           except Exception as e:
+               print("❌ Failed to send email:", e)
+           EOF
+           python3 upload_and_email.py
 
     
