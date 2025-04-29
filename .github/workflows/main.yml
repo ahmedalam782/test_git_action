@@ -35,18 +35,21 @@ jobs:
         run: flutter analyze
         continue-on-error: true
 
-      - name: Cache Flutter dependencies
-        uses: actions/cache@v3
+      - run: flutter build apk --release --split-per-abi
+      - run: |
+          flutter build ios --no-codesign
+          cd build/ios/iphoneos
+          mkdir Payload
+          cd Payload
+          ln -s ../Runner.app
+          cd ..
+          zip -r app.ipa Payload
+      - name: Push to Releases
+        uses: ncipollo/release-action@v1
         with:
-          path: |
-            ~/.pub-cache
-            .dart_tool
-            build/
-            android/.gradle/
-          key: ${{ runner.os }}-flutter-${{ hashFiles('**/*.gradle*','pubspec.lock') }}
-
-      - name: Build release APK
-        run: flutter build apk --release
+          artifacts: "build/app/outputs/apk/release/*,build/ios/iphoneos/app.ipa"
+          tag: v1.0.${{ github.run_number }}
+          token: ${{ secrets.TOKEN }}
 
 
     
